@@ -156,7 +156,7 @@ def correct_loop(df,column_name2, template):
     templates=correct_templates(df[column_name2])
     return df.index, templates
 
-def parallel_extract(df, nol, r, reaction_column, add_brackets=False, nproc = 20, timeout=3):
+def  parallel_extract(df, nol, r, reaction_column, add_brackets=False, nproc = 20, timeout=3):
     pool = Pool(processes=nproc)
     async_results = [pool.apply_async(get_templates, (df[reaction_column][idx], df["canonical_reac_smiles"][idx], nol, r, add_brackets)) for idx in df.index]
     templates = []
@@ -183,7 +183,7 @@ def templates_from_file(path, reaction_column = "rxn_smiles", name="template", n
     if data_format in ['json', 'json.gz']:
         data = pd.read_json(path+"."+data_format)
     elif data_format == 'csv':
-        data = pd.read_csv(path+"."+data_format)
+        data = pd.read_csv(path+"."+data_format, sep='\t')
     elif data_format in ['pkl', 'pickle']:
         data = pd.read_pickle(path+"."+data_format)
     elif data_format == 'hdf5':
@@ -192,29 +192,43 @@ def templates_from_file(path, reaction_column = "rxn_smiles", name="template", n
         raise ValueError("Invalid option for data_format")
         
     print("Preprocessing reactants...")
-    data["canonical_reac_smiles"] = Parallel(n_jobs=nproc, verbose=1)(delayed(canonicalize_mol)(rxn_smi,0) for rxn_smi in data[reaction_column])
+    # print(data)
+    if "canonical_reac_smiles" not in data.columns:
+        data["canonical_reac_smiles"] = Parallel(n_jobs=nproc, verbose=1)(delayed(canonicalize_mol)(rxn_smi,0) for rxn_smi in data[reaction_column])
 
-    print("Extracting templates (Radius 1 with special groups)...")
-    data[name] = parallel_extract(data, False, 1, reaction_column, nproc=nproc)
+    if name not in data.columns:
+        print("Extracting templates (Radius 1 with special groups)...")
+        data[name] = parallel_extract(data, False, 1, reaction_column, nproc=nproc)
+        data.to_csv(path+"."+data_format, index=False, sep='\t')
 
-    print("Extracting templates (Radius 1 without special groups)...")
-    data[name+"_r1"] = parallel_extract(data, True, 1, reaction_column, nproc=nproc)
+    if name+"_r1" not in data.columns:
+        print("Extracting templates (Radius 1 without special groups)...")
+        data[name+"_r1"] = parallel_extract(data, True, 1, reaction_column, nproc=nproc)
+        data.to_csv(path+"."+data_format, index=False, sep='\t')
 
-    print("Extracting templates (Radius 0 without special groups)...")
-    data[name+"_r0"] = parallel_extract(data, True, 0, reaction_column, nproc=nproc)
-
+    if name+"_r0" not in data.columns:
+        print("Extracting templates (Radius 0 without special groups)...")
+        data[name+"_r0"] = parallel_extract(data, True, 0, reaction_column, nproc=nproc)
+        data.to_csv(path+"."+data_format, index=False, sep='\t')
+        
     data = data.dropna(subset=[name,name+"_r0",name+"_r1"])
 
     print("Hierarchically correcting templates...")
     data[name+"_r1"] = correct_all_templates(data,name+"_r0",name+"_r1", nproc)
+
+    if drop_extra_cols:
+        data = data.drop(columns=[name+"_r0"])
+
+
+
     data[name] = correct_all_templates(data,name+"_r1",name, nproc)
 
     if drop_extra_cols:
-        data = data.drop(columns=["canonical_reac_smiles", name+"_r0",name+"_r1"])
+        data = data.drop(columns=["canonical_reac_smiles", name+"_r1"])
 
     if save:
         if data_format == 'csv':
-            data.to_csv(path+"_corrected."+data_format, index=False)
+            data.to_csv(path+"_corrected."+data_format, index=False, sep='\t')
         elif data_format == 'json':
             data.to_json(path+"_corrected."+data_format, orient='records')
         elif data_format == 'json.gz':
